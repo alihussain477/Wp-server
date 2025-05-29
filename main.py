@@ -1,85 +1,50 @@
-from flask import Flask, request, jsonify, render_template_string
-import subprocess, os
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import requests
+import os
+import time
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='')
+CORS(app)
 
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-  <title>WhatsApp Pair & Sender</title>
-  <style>
-    body { font-family: Arial; background: #111; color: #eee; text-align: center; padding: 30px; }
-    input, button { padding: 10px; margin: 10px; width: 300px; }
-    .box { background: #222; padding: 20px; border-radius: 10px; display: inline-block; }
-  </style>
-</head>
-<body>
-  <h2>WhatsApp Pair Code Generator</h2>
-  <div class="box">
-    <form id="pairForm">
-      <input name="sender" placeholder="Enter Sender Name" required><br>
-      <button type="submit">Generate Pair Code</button>
-    </form>
-  </div>
-
-  <h2>Send Message</h2>
-  <div class="box">
-    <form id="sendForm">
-      <input name="sender" placeholder="Sender Name" required><br>
-      <input name="target" placeholder="Target Number with +"><br>
-      <input name="message" placeholder="Message Text"><br>
-      <input name="delay" placeholder="Delay in Seconds"><br>
-      <button type="submit">Start Sending</button>
-    </form>
-  </div>
-
-  <script>
-    document.getElementById('pairForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      const res = await fetch('/generate_paircode', { method: 'POST', body: form });
-      const data = await res.json();
-      alert('QR Generation Started for: ' + data.sender);
-    };
-
-    document.getElementById('sendForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      const res = await fetch('/send_message', { method: 'POST', body: form });
-      const data = await res.json();
-      alert('Message sending started...');
-    };
-  </script>
-</body>
-</html>
-"""
+NODE_SERVER = "http://localhost:3001"
 
 @app.route('/')
 def index():
-    return render_template_string(HTML)
+    return send_from_directory('static', 'index.html')
 
-@app.route('/generate_paircode', methods=['POST'])
-def generate_paircode():
-    sender = request.form.get('sender')
-    if not sender:
-        return jsonify({'error': 'Sender name required'}), 400
+@app.route('/generate-qr', methods=['POST'])
+def generate_qr():
+    data = request.json
+    number = data.get('number')
+    if not number:
+        return jsonify({"error": "Number is required"}), 400
 
-    session_dir = f"sessions/{sender}"
-    os.makedirs(session_dir, exist_ok=True)
-    subprocess.Popen(['node', 'generate_pair.js', sender])
-    return jsonify({"status": "started", "sender": sender})
+    # Call Node.js backend to generate QR & start session
+    resp = requests.post(f"{NODE_SERVER}/generate", json={"number": number})
+    if resp.status_code == 200:
+        return jsonify({"status": "QR generation started"})
+    else:
+        return jsonify({"error": "Failed to start QR generation"}), 500
 
-@app.route('/send_message', methods=['POST'])
+@app.route('/send-message', methods=['POST'])
 def send_message():
-    sender = request.form.get('sender')
-    target = request.form.get('target')
-    message = request.form.get('message')
-    delay = request.form.get('delay')
+    data = request.json
+    number = data.get('number')
+    target = data.get('target')
+    message = data.get('message')
 
-    subprocess.Popen(['node', 'send_message.js', sender, target, message, delay])
-    return jsonify({"status": "sending_started"})
+    if not (number and target and message):
+        return jsonify({"error": "number, target and message required"}), 400
+
+    # Call Node.js backend to send message
+    resp = requests.post(f"{NODE_SERVER}/send", json={
+        "number": number,
+        "target": target,
+        "message": message
+    })
+    return jsonify(resp.json()), resp.status_code
 
 if __name__ == '__main__':
-    os.makedirs('sessions', exist_ok=True)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    os.makedirs('static/uploads', exist_ok=True)
+    app.run(port=5000, debug=True)
